@@ -14,26 +14,13 @@ Speed(100)
 AccelS(100)
 SpeedS(100)
 
--- Estados possíveis
-local STATE_INIT = "INIT"
-local STATE_IDLE = "IDLE"
-local STATE_VALIDATE = "VALIDATE_POSITION"
-local STATE_MANAGE_SCREW_INVENTORY = "MANAGE_SCREW_INVENTORY"
-local STATE_PICK_SCREW = "PICK_SCREW"
-local STATE_APPROACH_POINT = "APPROACH_POINT"
-local STATE_EXECUTE_SCREWING = "EXECUTE_SCREWING"
-local STATE_RESET = "RESET_REGISTER"
-local STATE_RETRACT = "RETRACT"
-local STATE_CLOSE = "CLOSE_MODBUS"
-local STATE_ERROR = "ERROR"
 
 -- Variáveis de controle
-state = STATE_INIT
+currentState = STATE_INIT
 lastStart = 0
 local id -- ID da conexão Modbus com o controlador principal (Slave 1)
 
--- Variáveis de posição
-BoardX, BoardY, BoardZ = 0, 0, 0
+
 local tam_bit = 3.63
 local sqrt_2 = 1.41421356 
 local posAprox = nil
@@ -42,9 +29,9 @@ local robot_ip = '192.168.0.192'
 
 -- Loop principal da máquina de estados
 while true do
-    print("Estado atual da máquina: " .. state)
+    print("Estado atual da máquina: " .. currentState)
 
-    if state == STATE_INIT then
+    if currentState == STATE_INIT then
         local resultCreate
         resultCreate, id = ModbusCreate(robot_ip, 502, 1)
         if resultCreate == 0 then
@@ -56,43 +43,57 @@ while true do
                 return
             end
             
-            SetHoldRegs(id, 4004, 1, {0}, "U16") -- Reseta flag de erro
-            SetHoldRegs(id, 4005, 1, {0}, "U16") -- Reseta flag de erro
-            SetHoldRegs(id, 4000, 1, {0}, "U16")
-            SetHoldRegs(id, 4001, 1, {0}, "U16")
-            SetHoldRegs(id, 4002, 1, {0}, "U16")
-            SetHoldRegs(id, 4003, 1, {0}, "U16")
-           -- SetHoldRegs(id, 4008, 1, {18}, "U16")
+            resetStartState()
+            
             MoveJ(P1)
-            state = STATE_IDLE
+            currentState = STATE_IDLE
         else
             print("✗ Falha ao criar conexão Modbus (Principal).")
             return
         end
 
-    elseif state == STATE_IDLE then
-        if lastStart == 1  and start == 1 then
-            state = STATE_VALIDATE
+    elseif currentState == STATE_IDLE then
+    
+        readTargetCoordinates()
+        --[[
+        if readTargetCoordinates() then
+            currentState = STATE_VALIDATE
+        else
+            currentState = STATE_ERROR
         end
-        lastStart = start
+        --]]
+        
+        local start_data = GetHoldRegs(id, START_REGISTER, 1, "U16")
+        if start_data and #start_data > 0 then
+            local start_command = start_data[1]
+            
+            if start_command == 1 then
+                print("Comando de APARAFUSAMENTO (1) recebido. Transicionando para STATE_INIT.")
+                currentState = STATE_VALIDATE
+            elseif start_command == 2 then
+                print("Comando de CALIBRAÇÃO (2) recebido. Transicionando para STATE_CALIBRATE_INIT.")
+                currentState = STATE_CALIBRATE_INIT
+            end
+        end
+        Sleep(200)
 
-    elseif state == STATE_VALIDATE then
+    elseif currentState == STATE_VALIDATE then
        
         safe_switch = DI(5)
         pos_switch = DI(1)
-        local posValida = (BoardX >= (0 + tam_bit) and BoardX < (140 - tam_bit)) and (BoardY >= (0 + tam_bit) and BoardY < (141 - tam_bit)) and (BoardZ >= 0 and BoardZ < 200) and (BoardY >= BoardX - 130 + (tam_bit * sqrt_2))
+        local posValida = (g_target_coords.x >= (0 + tam_bit) and g_target_coords.x < (140 - tam_bit)) and (g_target_coords.y >= (0 + tam_bit) and g_target_coords.y < (141 - tam_bit)) and (g_target_coords.z >= 0 and g_target_coords.z < 200) and (g_target_coords.y >= g_target_coords.x - 130 + (tam_bit * sqrt_2))
         
         if not posValida then
             print("✗fora dos limites de segurança!")
             SetHoldRegs(id, 4004, 1, {1}, "U16") -- Define erro
-            state = STATE_ERROR
+            currentState = STATE_ERROR
         elseif safe_switch == ON and pos_switch == ON then
             SetHoldRegs(id, 4004, 1, {0}, "U16") -- Sem erro
-            state = STATE_PICK_SCREW
+            currentState = STATE_PICK_SCREW
         end
        
         
-     elseif state == STATE_PICK_SCREW then
+     elseif currentState == STATE_PICK_SCREW then
         -- Executa a rotina de coleta
         Go(P2, "User=3 Tool=1 CP=1 Speed=100 Accel=20")
         Sync()
@@ -110,29 +111,19 @@ while true do
         
         Go(P2, "User=3 Tool=1 CP=1 Speed=40 Accel=20")
         Sync()
+        currentState = STATE_APPROACH_POINT -- Transiciona para o próximo estado
 
-        -- Decrementa e atualiza o contador de parafusos no registrador Modbus
-        local new_count = current_count
-        SetHoldRegs(id, 4008, 1, {new_count}, "U16")
-        --local QTD_PARA =  GetHoldRegs(id, 4008, 1, "U16")[1]
-        --if QTD_PARA == 0 then
-          --SetHoldRegs(id, 4008, 1, {18}, "U16")
-        --end
-        
-        --print("✓ Parafuso coletado. Restam: " .. new_count)
-        state = STATE_APPROACH_POINT -- Transiciona para o próximo estado
-
-    elseif state == STATE_APPROACH_POINT then
+    elseif currentState == STATE_APPROACH_POINT then
         print("→ Estado: Movendo para aproximação...")
-        posAprox = RP(P4, {BoardX, BoardY, -BoardZ - 80})
-        posAprox1 = RP(P4, {BoardX, BoardY, -BoardZ - 10})
-        posFinal = RP(P4, {BoardX, BoardY, -BoardZ + 1})
+        posAprox = RP(P4, {g_target_coords.x, g_target_coords.y, -g_target_coords.z - 80})
+        posAprox1 = RP(P4, {g_target_coords.x, g_target_coords.y, -g_target_coords.z - 10})
+        posFinal = RP(P4, {g_target_coords.x, g_target_coords.y, -g_target_coords.z + 1})
         Move(posAprox, "User=2 Tool=1 CP=1 SpeedS=30 AccelS=30")
         Move(posAprox1, "User=2 Tool=1 CP=1 SpeedS=20 AccelS=30")
         Sync()
-        state = STATE_EXECUTE_SCREWING
+        currentState = STATE_EXECUTE_SCREWING
  
-    elseif state == STATE_EXECUTE_SCREWING then
+    elseif currentState == STATE_EXECUTE_SCREWING then
         print("→ Estado: Executando aparafusamento...")
         --local drive_id_temp = connectAndConfigureScrewdriver()
         
@@ -160,7 +151,7 @@ while true do
                 Sleep(50)
                 ModbusClose(g_drive_id)
                 g_drive_id = nil
-                state = STATE_RETRACT
+                currentState = STATE_RETRACT
             else
                 print("✗ ERRO: Movimento terminou mas o torque não foi atingido.")
                 SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {0}, "U32") -- Garante que o motor pare
@@ -168,32 +159,30 @@ while true do
                 Sleep(50)
                 ModbusClose(g_drive_id)
                 g_drive_id = nil
-                state = STATE_ERROR
+                currentState = STATE_ERROR
             end
         else
             print("✗ ERRO: Falha ao conectar/configurar parafusadeira.")
-            state = STATE_ERROR
+            currentState = STATE_ERROR
         end
 
-    elseif state == STATE_RETRACT then
+    elseif currentState == STATE_RETRACT then
         print("→ Estado: Recuando...")
         Move(posAprox, "User=2 Tool=1 CP=1 SpeedS=50 AccelS=50")
         Go(P1)
         Sync()
-        state = STATE_RESET
+        currentState = STATE_RESET
         
-    elseif state == STATE_RESET then
+    elseif currentState == STATE_RESET then
          
         -- Reseta registradores
-        SetHoldRegs(id, 4000, 1, {0}, "U16")
-        SetHoldRegs(id, 4001, 1, {0}, "U16")
-        SetHoldRegs(id, 4002, 1, {0}, "U16")
-        SetHoldRegs(id, 4003, 1, {0}, "U16")
+        resetStartState()
+        
         start = 0
       
-        state = STATE_CLOSE
+        currentState = STATE_CLOSE
 
-    elseif state == STATE_CLOSE then
+    elseif currentState == STATE_CLOSE then
         
         
         if g_drive_id ~= nil then
@@ -203,21 +192,113 @@ while true do
         end
         
         ModbusClose(id)
-        state = STATE_INIT
+        currentState = STATE_INIT
 
-    elseif state == STATE_ERROR then
+    elseif currentState == STATE_ERROR then
         start = 0
         print("⚠️ Processo em estado de ERRO.")
         -- Lógica de reset de erro
         
         local erroPosicao = GetHoldRegs(id, 4004, 1, "U16")[1]
         local erroParaf = GetHoldRegs(id, 4005, 1, "U16")[1]
-        state = STATE_RESET
-        if erroPosicao == 0 and erroParaf == 0 then
-  
-              state = STATE_RESET
+        currentState = STATE_RESET
+        if erroPosicao == 0 and erroParaf == 0 then 
+              currentState = STATE_RESET
         end
+        Sleep(200)
     end
 
-    Sleep(250)
+----------------------------------------------------------------------
+    -- INÍCIO: FLUXO DE CALIBRAÇÃO
+    ----------------------------------------------------------------------
+    if currentState == STATE_CALIBRATE_INIT then
+        print("[CALIBRAÇÃO] Entrou em STATE_CALIBRATE_INIT")
+        currentState = STATE_CALIBRATE_VALIDATE
+        --[[
+        if readTargetCoordinates() then
+            currentState = STATE_CALIBRATE_SIMULATE_PICK
+        else
+            -- Em calibração, uma falha de leitura não vai para erro.
+            print("[CALIBRAÇÃO] AVISO: Falha ao ler coordenadas. Retornando para IDLE.")
+            resetStartState()
+            currentState = STATE_IDLE
+        end
+        --]]
+    elseif currentState == STATE_CALIBRATE_VALIDATE then
+    
+    posValida = (g_target_coords.x >= (0 + tam_bit) and g_target_coords.x < (140 - tam_bit)) and (g_target_coords.y >= (0 + tam_bit) and g_target_coords.y < (141 - tam_bit)) and (g_target_coords.z >= 0 and g_target_coords.z < 200) and (g_target_coords.y >= g_target_coords.x - 130 + (tam_bit * sqrt_2))
+        
+        if not posValida then
+            print("✗fora dos limites de segurança!")
+            SetHoldRegs(id, 4004, 1, {1}, "U16") -- Define erro
+            currentState = STATE_ERROR
+        else 
+            SetHoldRegs(id, 4004, 1, {0}, "U16") -- Sem erro
+            currentState = STATE_CALIBRATE_SIMULATE_PICK
+        end
+        
+    elseif currentState == STATE_CALIBRATE_SIMULATE_PICK then
+        print("[CALIBRAÇÃO] Entrou em STATE_CALIBRATE_SIMULATE_PICK")
+        Go(P1, "User=3 Tool=1 CP=1 Speed=100 Accel=20")
+        Sync()
+        -- LIGA O MOTOR PARA GIRAR ENQUANTO PEGA O PARAFUSO
+        print("  Ligando motor da parafusadeira para a coleta...")
+        local pick_rotation_command = toUint32(-INITIAL_TARGET_CURRENT_REG_VAL)
+        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {pick_rotation_command}, "U32")
+        
+        Move(P2, "User=3 Tool=1 CP=1 SpeedS=5 AccelS=5")
+        Sync()
+        -- DESLIGA O MOTOR APÓS A COLETA
+        print("  Desligando motor da parafusadeira...")
+        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {0}, "U32")
+        Sleep(100) 
+        
+        Move(P1, "User=3 Tool=1 CP=1 SpeedS=10 AccelS=20")
+        Sync()
+        -- Bypass do estado de aproximação geral, indo direto para o ponto de aparafusamento
+        currentState = STATE_CALIBRATE_APPROACH_POINT
+
+    elseif currentState == STATE_CALIBRATE_APPROACH_POINT then
+        print("[CALIBRAÇÃO] Entrou em STATE_CALIBRATE_APPROACH_POINT")
+        print("→ Estado: Movendo para aproximação...")
+        posAprox = RP(P4, {g_target_coords.x, g_target_coords.y, -g_target_coords.z - 80})
+        posAprox1 = RP(P4, {g_target_coords.x, g_target_coords.y, -g_target_coords.z - 10})
+        posFinal = RP(P4, {g_target_coords.x, g_target_coords.y, -g_target_coords.z + 1})
+        Move(posAprox, "User=2 Tool=1 CP=1 SpeedS=30 AccelS=30")
+        Move(posAprox1, "User=2 Tool=1 CP=1 SpeedS=20 AccelS=30")
+        Sync()
+        currentState = STATE_CALIBRATE_SCREWING
+        
+    elseif currentState == STATE_CALIBRATE_SCREWING then
+        print("[CALIBRAÇÃO] Entrou em STATE_CALIBRATE_SCREWING")
+        
+        -- LIGA O MOTOR PARA GIRAR ENQUANTO PEGA O PARAFUSO
+        print("  Ligando motor da parafusadeira para a coleta...")
+        pick_rotation_command = toUint32(-INITIAL_TARGET_CURRENT_REG_VAL)
+        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {pick_rotation_command}, "U32")
+        
+        Move(posFinal, "User=2 Tool=1 CP=1 SpeedS=1 AccelS=1")
+        Sync()
+        
+        -- DESLIGA O MOTOR APÓS AO APARAFUSAMENTO
+        print("  Desligando motor da parafusadeira...")
+        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {0}, "U32")
+        Sleep(200) 
+        Move(posAprox, "User=2 Tool=1 CP=1 SpeedS=10 AccelS=30")
+        Sync()
+                   
+            -- Independentemente do resultado, o ciclo continua
+            currentState = STATE_CALIBRATE_RETURN
+        
+        
+    elseif currentState == STATE_CALIBRATE_RETURN then
+        print("[CALIBRAÇÃO] Entrou em STATE_CALIBRATE_RETURN")
+        print("→ Estado: Recuando...")
+        Move(posAprox, "User=2 Tool=1 CP=1 SpeedS=50 AccelS=50")
+        Go(P1)
+        Sync()
+        print("Ciclo de calibração concluído.")
+        resetStartState()
+        currentState = STATE_IDLE
+    end    
 end

@@ -8,25 +8,53 @@
 --]]
 print("Inicializando definições globais...")
 id = 0
-start = 0
-BoardX = 0
-BoardY = 0
-BoardZ = 0
+currentState = 0
+data_x = 0
+data_y = 0
+data_z = 0
 att = 0
 
+-- Definição dos Estados da Máquina de Estados (Fluxo Principal)
+STATE_INIT = "INIT"
+STATE_IDLE = "IDLE"
+STATE_VALIDATE = "VALIDATE_POSITION"
+STATE_MANAGE_SCREW_INVENTORY = "MANAGE_SCREW_INVENTORY"
+STATE_PICK_SCREW = "PICK_SCREW"
+STATE_APPROACH_POINT = "APPROACH_POINT"
+STATE_EXECUTE_SCREWING = "EXECUTE_SCREWING"
+STATE_RESET = "RESET_REGISTER"
+STATE_RETRACT = "RETRACT"
+STATE_CLOSE = "CLOSE_MODBUS"
+STATE_ERROR = "ERROR"
+
+-- Definição dos Novos Estados da Máquina de Estados (Fluxo de Calibração)
+STATE_CALIBRATE_INIT = "STATE_CALIBRATE_INIT"
+STATE_CALIBRATE_VALIDATE = "STATE_CALIBRATE_VALIDATE_POSITION"
+STATE_CALIBRATE_SIMULATE_PICK = "STATE_CALIBRATE_SIMULATE_PICK"
+STATE_CALIBRATE_APPROACH_POINT = "STATE_CALIBRATE_APPROACH_POINT"
+STATE_CALIBRATE_SCREWING = "STATE_CALIBRATE_SCREWING"
+STATE_CALIBRATE_RETURN = "STATE_CALIBRATE_RETURN"
 
 -- Variáveis globais para comunicação entre threads
 g_start_torque_monitoring = false
 g_screwing_in_progress = false
 g_torque_reached = false
 g_drive_id = nil
+g_target_coords = {x=0, y=0, z=0} -- Armazena as coordenadas recebidas
 
 -- Parâmetros do Servo Drive da Parafusadeira (Drive D2)
 SCREWDRIVER_SLAVE_ID = 3
 SCREWDRIVER_IP = "127.0.0.1"
 SCREWDRIVER_PORT = 60000
+SCREWING_TIMEOUT = 5.0 -- Timeout para a operação de aparafusamento em segundos
 
--- Registradores Modbus do Drive D2
+-- Mapeamento de Registradores Modbus (Servidor AAS)
+START_REGISTER = 4000
+X_COORD_REGISTER = 4001
+Y_COORD_REGISTER = 4002
+Z_COORD_REGISTER = 4003
+
+-- Mapeamento de Registradores Modbus (Drive D2 via RTU)
 OP_MODE_ADDR = 424
 TARGET_CURRENT_ADDR = 4004
 ACTUAL_CURRENT_ADDR = 104
@@ -62,6 +90,33 @@ function connectAndConfigureScrewdriver()
 
     print("✓ Modo de torque da parafusadeira configurado.")
     return drive_id
+end
+
+function readTargetCoordinates()
+    print("Lendo coordenadas do servidor MODBUS")
+    data_x = GetHoldRegs(id, X_COORD_REGISTER, 1, "U16")[1]
+    data_y = GetHoldRegs(id, Y_COORD_REGISTER, 1, "U16")[1]
+    data_z = GetHoldRegs(id, Z_COORD_REGISTER, 1, "U16")[1]
+
+    --if data_x !=0 and data_y !=0 and data_z !=0 then
+        g_target_coords.x = data_x*0.01
+        g_target_coords.y = data_y*0.01
+        g_target_coords.z = data_z*0.01
+        --print(string.format("Coordenadas recebidas: X=%.2f, Y=%.2f, Z=%.2f", g_target_coords.x, g_target_coords.y, g_target_coords.z))
+        --return true
+    --end
+    
+    --print("ERRO: Falha ao ler as coordenadas dos registradores Modbus.")
+    --return false
+end
+
+function resetStartState()
+    print("Finalizando ciclo. Escrevendo 0 no registradores")
+    SetHoldRegs(id, START_REGISTER, 1, {0}, "U16")
+    SetHoldRegs(id, X_COORD_REGISTER, 1, {0}, "U16")
+    SetHoldRegs(id, Y_COORD_REGISTER, 1, {0}, "U16")
+    SetHoldRegs(id, Z_COORD_REGISTER, 1, {0}, "U16")
+    Sleep(50) -- Garante que a escrita seja processada
 end
 
 print("Definições globais carregadas.")

@@ -38,7 +38,7 @@ while true do
                 end
                 print(string.format("[Thread Monitoramento]: TORQUE Atual (%.4f Nm)!", actual_torque_nm))
             end
-            Sleep(20)
+            Sleep(10)
         end
         
         g_start_torque_monitoring = false 
