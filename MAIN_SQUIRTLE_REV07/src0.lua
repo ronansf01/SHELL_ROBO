@@ -99,14 +99,15 @@ while true do
         Sync()
         -- LIGA O MOTOR PARA GIRAR ENQUANTO PEGA O PARAFUSO
         print("  Ligando motor da parafusadeira para a coleta...")
-        local pick_rotation_command = toUint32(-INITIAL_TARGET_CURRENT_REG_VAL)
-        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {pick_rotation_command}, "U32")
+        
+        SetScrewdriverRPM(800)
+        TurnScrewdriver("ON")
         
         Go(P3, "User=3 Tool=1 CP=1 Speed=5 Accel=5")
         Sync()
         -- DESLIGA O MOTOR APÓS A COLETA
-        print("  Desligando motor da parafusadeira...")
-        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {0}, "U32")
+       
+        TurnScrewdriver("OFF")
         Sleep(100) 
         
         Go(P2, "User=3 Tool=1 CP=1 Speed=40 Accel=20")
@@ -115,9 +116,11 @@ while true do
 
     elseif currentState == STATE_APPROACH_POINT then
         print("→ Estado: Movendo para aproximação...")
+        
         posAprox = RP(P4, {g_target_coords.x, g_target_coords.y, -g_target_coords.z - 80})
         posAprox1 = RP(P4, {g_target_coords.x, g_target_coords.y, -g_target_coords.z - 10})
         posFinal = RP(P4, {g_target_coords.x, g_target_coords.y, -g_target_coords.z + 1})
+        
         Move(posAprox, "User=2 Tool=1 CP=1 SpeedS=30 AccelS=30")
         Move(posAprox1, "User=2 Tool=1 CP=1 SpeedS=20 AccelS=30")
         Sync()
@@ -129,8 +132,8 @@ while true do
         
         if g_drive_id then
             --g_drive_id = drive_id_temp
-            local reverse_command = toUint32(-INITIAL_TARGET_CURRENT_REG_VAL)
-            SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {reverse_command}, "U32")
+            SetScrewdriverRPM(1500)
+            TurnScrewdriver("ON")
             
             g_torque_reached = false
             g_screwing_in_progress = true
@@ -154,7 +157,9 @@ while true do
                 currentState = STATE_RETRACT
             else
                 print("✗ ERRO: Movimento terminou mas o torque não foi atingido.")
-                SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {0}, "U32") -- Garante que o motor pare
+                
+                TurnScrewdriver("OFF") -- Garante que o motor pare
+                
                 SetHoldRegs(id, 4005, 1, {1}, "U16")
                 Sleep(50)
                 ModbusClose(g_drive_id)
@@ -243,15 +248,18 @@ while true do
         Sync()
         -- LIGA O MOTOR PARA GIRAR ENQUANTO PEGA O PARAFUSO
         print("  Ligando motor da parafusadeira para a coleta...")
-        local pick_rotation_command = toUint32(-INITIAL_TARGET_CURRENT_REG_VAL)
-        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {pick_rotation_command}, "U32")
         
-        Move(P2, "User=3 Tool=1 CP=1 SpeedS=5 AccelS=5")
+        SetScrewdriverRPM(500)
+        TurnScrewdriver("ON")
+        
+        
+        Move(P2, "User=3 Tool=1 CP=1 SpeedS=1 AccelS=1")
         Sync()
         -- DESLIGA O MOTOR APÓS A COLETA
+        Sleep(200)
         print("  Desligando motor da parafusadeira...")
-        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {0}, "U32")
-        Sleep(100) 
+        
+        TurnScrewdriver("OFF")
         
         Move(P1, "User=3 Tool=1 CP=1 SpeedS=10 AccelS=20")
         Sync()
@@ -274,15 +282,18 @@ while true do
         
         -- LIGA O MOTOR PARA GIRAR ENQUANTO PEGA O PARAFUSO
         print("  Ligando motor da parafusadeira para a coleta...")
-        pick_rotation_command = toUint32(-INITIAL_TARGET_CURRENT_REG_VAL)
-        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {pick_rotation_command}, "U32")
+        
+        
+        SetScrewdriverRPM(1000)
+        TurnScrewdriver("ON")
+        
         
         Move(posFinal, "User=2 Tool=1 CP=1 SpeedS=1 AccelS=1")
         Sync()
         
         -- DESLIGA O MOTOR APÓS AO APARAFUSAMENTO
         print("  Desligando motor da parafusadeira...")
-        SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, {0}, "U32")
+        TurnScrewdriver("OFF")
         Sleep(200) 
         Move(posAprox, "User=2 Tool=1 CP=1 SpeedS=10 AccelS=30")
         Sync()

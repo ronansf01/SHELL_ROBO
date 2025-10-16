@@ -58,6 +58,7 @@ Z_COORD_REGISTER = 4003
 OP_MODE_ADDR = 424
 TARGET_CURRENT_ADDR = 4004
 ACTUAL_CURRENT_ADDR = 104
+TARGET_VELOCITY_ADDR = 6
 
 -- Parâmetros do Motor e do Processo de Aparafusamento
 MOTOR_KT = 0.356
@@ -119,7 +120,61 @@ function resetStartState()
     Sleep(50) -- Garante que a escrita seja processada
 end
 
-print("Definições globais carregadas.")
+function TurnScrewdriver(status, direction)
+    if not g_drive_id then
+        print("ERRO (TurnScrewdriver): Conexão com o drive (g_drive_id) não está ativa.")
+        return
+    end
+
+    -- Define a direção padrão como 'reverse' se não for especificada
+    local effective_direction = direction or "reverse"
+    local current_value_to_set
+
+    if status == "OFF" then
+        print("Desligando parafusadeira...")
+        current_value_to_set = {0}
+    elseif status == "ON" then
+        if effective_direction == "reverse" then
+            print("Ligando parafusadeira (sentido anti-horário)...")
+            current_value_to_set = {toUint32(-INITIAL_TARGET_CURRENT_REG_VAL)}
+        elseif effective_direction == "forward" then
+            print("Ligando parafusadeira (sentido horário)...")
+            current_value_to_set = {toUint32(INITIAL_TARGET_CURRENT_REG_VAL)}
+        else
+            print("ERRO (TurnScrewdriver): Direção inválida. Use 'forward' ou 'reverse'.")
+            return
+        end
+    else
+        print("ERRO (TurnScrewdriver): Status inválido. Use 'ON' ou 'OFF'.")
+        return
+    end
+    
+    -- Envia o comando de corrente para o drive
+    SetHoldRegs(g_drive_id, TARGET_CURRENT_ADDR, 1, current_value_to_set, "U32")
+    Sleep(50) -- Pequena pausa para garantir o envio do comando
+end
+
+function SetScrewdriverRPM(rpm)
+    if not g_drive_id then
+        print("ERRO (SetScrewdriverRPM): Conexão com o drive (g_drive_id) não está ativa.")
+        return
+    end
+    
+    if type(rpm) ~= "number" or rpm < 0 then
+        print("ERRO (SetScrewdriverRPM): RPM deve ser um número positivo.")
+        return
+    end
+
+    -- Fator de conversão: 10000 counts/sec = 1 rev/sec
+    -- 1 RPM = (10000 / 60) counts/sec
+    local counts_per_second = rpm * (10000 / 60)
+
+    print(string.format("Ajustando RPM da parafusadeira para %.0f (%.2f counts/s)...", rpm, counts_per_second))
+
+    -- Envia o comando de velocidade para o drive como um float de 32 bits
+    SetHoldRegs(g_drive_id, TARGET_VELOCITY_ADDR, 1, {counts_per_second}, "F32")
+    Sleep(30) -- Pequena pausa para garantir o envio do comando
+end
 
 -- Função para converter um INT32 com sinal para um U32 para envio pelo Dobot
 function toUint32(signed_int)
@@ -131,3 +186,4 @@ function toUint32(signed_int)
     return signed_int
 end
 
+print("Definições globais carregadas.")
